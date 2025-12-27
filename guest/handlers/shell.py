@@ -173,3 +173,24 @@ def handle_shell_exec(context: Dict[str, Any]) -> Dict[str, Any]:
             f"Command execution failed: {str(e)}",
             data={"duration_ms": timer.elapsed_ms}
         )
+
+if __name__ == "__main__":
+    # 简单测试
+    test_context = {
+        "body": {
+            "command": "ls -l /",
+            "timeout": 10,
+        },
+        "config": {
+            "security": {
+                "allowed_commands": ["ls", "cat", "echo"]
+            }
+        }
+    }
+    
+    try:
+        result = handle_shell_exec(test_context)
+        print("Command executed successfully:")
+        print(result)
+    except RPCError as e:
+        print(f"RPC Error {e.code}: {e.message}")
