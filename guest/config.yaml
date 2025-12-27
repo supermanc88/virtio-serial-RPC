@@ -1,0 +1,40 @@
+# Guest端配置文件
+# virtio-serial RPC Guest Configuration
+
+device:
+  # virtio-serial字符设备路径
+  path: /dev/virtio-ports/test.vserial.0
+  # 读取缓冲区大小（字节）
+  buffer_size: 65536
+
+server:
+  # 最大请求大小（字节）
+  max_request_size: 10485760  # 10MB
+  # 请求超时（秒）
+  request_timeout: 60
+
+security:
+  # 是否启用认证（预留）
+  enable_auth: false
+  
+  # 允许执行的命令列表
+  # 空列表表示使用默认白名单
+  # 如需允许所有命令，设置为 null
+  allowed_commands: []
+  
+  # 允许访问的文件路径前缀
+  allowed_paths:
+    - /tmp/
+    - /var/log/
+    - /home/
+    - /opt/
+
+logging:
+  # 日志级别: DEBUG, INFO, WARNING, ERROR
+  level: INFO
+  # 日志文件路径（可选，不配置则输出到控制台）
+  # file: /var/log/virtio-rpc-guest.log
+  # 日志文件最大大小
+  max_size: 10MB
+  # 保留的日志文件数量
+  backup_count: 5
