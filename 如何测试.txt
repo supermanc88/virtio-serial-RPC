@@ -1,0 +1,419 @@
+# virtio-serial RPC 测试部署指南
+
+## 环境信息
+
+| 角色 | IP地址 | 说明 |
+|------|--------|------|
+| Host (宿主机) | 10.210.20.17 | 运行QEMU的物理机/宿主机 |
+| Guest (虚拟机) | 10.210.23.3 | KVM虚拟机 |
+
+已配置SSH公钥到远端设备，无需登录验证。
+
+---
+
+## 一、部署前准备
+
+### 1.1 检查远端连通性
+
+```bash
+# 测试Host连通性
+ssh root@10.210.20.17 "echo 'Host连接成功'"
+
+# 测试Guest连通性
+ssh root@10.210.23.3 "echo 'Guest连接成功'"
+```
+
+### 1.2 检查virtio-serial设备
+
+```bash
+# 在Host上检查UNIX域套接字是否存在
+ssh root@10.210.20.17 "ls -la /var/lib/libvirt/qemu/channel/target/domain-26-UCypher-newtest1/test.vserial.0"
+
+# 在Guest上检查字符设备是否存在
+ssh root@10.210.23.3 "ls -la /dev/virtio-ports/test.vserial.0"
+```
+
+如果设备不存在，需要在QEMU启动参数中添加virtio-serial配置，参考ReadMe.md中的配置说明。
+
+### 1.3 检查远端Python环境
+
+```bash
+# 检查Host Python版本
+ssh root@10.210.20.17 "python3 --version"
+
+# 检查Guest Python版本
+ssh root@10.210.23.3 "python3 --version"
+```
+
+要求Python >= 3.8
+
+---
+
+## 二、处理依赖包
+
+由于远端环境可能无法访问外网下载依赖包，需要提前准备好依赖。
+
+### 2.1 方案一：打包依赖到vendor目录（推荐）
+
+```bash
+# 在本地创建vendor目录并下载依赖
+cd /Users/chengheming/Source/Personal/KVM相关/virtio-serial-RPC
+
+# 为host下载依赖
+pip download -r requirements.txt -d host/vendor/
+
+# 为guest下载依赖（如果依赖相同可共用）
+pip download -r requirements.txt -d guest/vendor/
+```
+
+远端安装方式：
+```bash
+# 在远端使用本地vendor目录安装
+pip3 install --no-index --find-links=/opt/host/vendor -r /opt/host/requirements.txt
+pip3 install --no-index --find-links=/opt/guest/vendor -r /opt/guest/requirements.txt
+```
+
+### 2.2 方案二：创建完整的虚拟环境打包
+
+```bash
+# 本地创建虚拟环境并安装依赖
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+
+# 打包整个虚拟环境（注意：可能存在平台兼容性问题）
+tar -czvf venv.tar.gz venv/
+```
+
+### 2.3 方案三：SSH反向代理下载（推荐，简单高效）
+
+当远端设备无法访问外网，但本地机器可以时，可以通过SSH反向代理让远端借助本地网络下载依赖。
+
+#### 步骤一：本地启动代理服务
+
+```bash
+# 方式A：如果本地有HTTP代理（如ClashX、V2Ray等），直接使用其端口
+# 假设本地代理端口为 7890
+
+# 方式B：如果没有代理，可以用Python快速启动一个简单的HTTP代理
+pip install proxy.py
+proxy --port 7890
+```
+
+#### 步骤二：SSH连接时建立反向隧道
+
+```bash
+# 连接Host，将远端的7890端口映射到本地的7890端口
+ssh -R 7890:127.0.0.1:7890 root@10.210.20.17
+
+# 连接Guest
+ssh -R 7890:127.0.0.1:7890 root@10.210.23.3
+```
+
+#### 步骤三：远端配置代理并安装依赖
+
+```bash
+# 在远端SSH会话中设置代理环境变量
+export http_proxy=http://127.0.0.1:7890
+export https_proxy=http://127.0.0.1:7890
+
+# 验证代理是否生效
+curl -I https://pypi.org
+
+# 使用pip安装依赖
+pip3 install -r /opt/virtio-rpc/requirements.txt
+
+# 或者直接在pip命令中指定代理
+pip3 install --proxy http://127.0.0.1:7890 -r /opt/virtio-rpc/requirements.txt
+```
+
+#### 一键操作脚本
+
+```bash
+# 本地执行：SSH连接并自动配置代理安装依赖
+ssh -R 7890:127.0.0.1:7890 root@10.210.20.17 << 'EOF'
+export https_proxy=http://127.0.0.1:7890
+pip3 install pyyaml psutil
+EOF
+
+ssh -R 7890:127.0.0.1:7890 root@10.210.23.3 << 'EOF'
+export https_proxy=http://127.0.0.1:7890
+pip3 install pyyaml psutil
+EOF
+```
+
+#### 使用SOCKS代理（如果HTTP代理不可用）
+
+```bash
+# 本地：建立动态端口转发（SOCKS代理）
+# 这会在远端创建一个SOCKS5代理
+ssh -R 1080:127.0.0.1:1080 root@10.210.20.17
+
+# 远端：需要安装并使用proxychains或tsocks
+# 或者使用支持SOCKS的pip配置
+pip3 install --proxy socks5://127.0.0.1:1080 -r requirements.txt
+```
+
+### 2.4 方案四：检查是否可使用系统自带包
+
+如果依赖简单（如只需pyyaml和psutil），可以尝试使用系统包管理器：
+```bash
+# CentOS/RHEL
+ssh root@10.210.20.17 "yum install -y python3-pyyaml python3-psutil"
+
+# Ubuntu/Debian
+ssh root@10.210.23.3 "apt-get install -y python3-yaml python3-psutil"
+```
+
+---
+
+## 三、部署程序
+
+### 3.1 创建远端目录
+
+```bash
+# 在Host上创建目录
+ssh root@10.210.20.17 "mkdir -p /opt/virtio-rpc/{host,logs}"
+
+# 在Guest上创建目录
+ssh root@10.210.23.3 "mkdir -p /opt/virtio-rpc/{guest,logs}"
+```
+
+### 3.2 使用rsync同步代码（推荐）
+
+```bash
+# 项目根目录
+PROJECT_DIR="/Users/chengheming/Source/Personal/KVM相关/virtio-serial-RPC"
+
+# 同步Host程序
+rsync -avz --progress \
+    --exclude='__pycache__' \
+    --exclude='*.pyc' \
+    --exclude='.git' \
+    ${PROJECT_DIR}/host/ root@10.210.20.17:/opt/virtio-rpc/host/
+
+# 同步Guest程序
+rsync -avz --progress \
+    --exclude='__pycache__' \
+    --exclude='*.pyc' \
+    --exclude='.git' \
+    ${PROJECT_DIR}/guest/ root@10.210.23.3:/opt/virtio-rpc/guest/
+
+# 同步公共模块（如果有）
+rsync -avz --progress \
+    ${PROJECT_DIR}/common/ root@10.210.20.17:/opt/virtio-rpc/common/
+rsync -avz --progress \
+    ${PROJECT_DIR}/common/ root@10.210.23.3:/opt/virtio-rpc/common/
+
+# 同步requirements.txt
+scp ${PROJECT_DIR}/requirements.txt root@10.210.20.17:/opt/virtio-rpc/
+scp ${PROJECT_DIR}/requirements.txt root@10.210.23.3:/opt/virtio-rpc/
+```
+
+### 3.3 使用scp同步代码（备选）
+
+```bash
+PROJECT_DIR="/Users/chengheming/Source/Personal/KVM相关/virtio-serial-RPC"
+
+# 同步Host程序
+scp -r ${PROJECT_DIR}/host/ root@10.210.20.17:/opt/virtio-rpc/host/
+
+# 同步Guest程序
+scp -r ${PROJECT_DIR}/guest/ root@10.210.23.3:/opt/virtio-rpc/guest/
+```
+
+### 3.4 安装依赖（在远端执行）
+
+```bash
+# Host端安装依赖
+ssh root@10.210.20.17 "cd /opt/virtio-rpc && pip3 install --no-index --find-links=host/vendor -r requirements.txt"
+
+# Guest端安装依赖
+ssh root@10.210.23.3 "cd /opt/virtio-rpc && pip3 install --no-index --find-links=guest/vendor -r requirements.txt"
+```
+
+---
+
+## 四、启动服务
+
+### 4.1 启动Guest端服务（先启动）
+
+```bash
+# 方式一：前台运行（调试用）
+ssh root@10.210.23.3 "cd /opt/virtio-rpc && python3 -m guest.server"
+
+# 方式二：后台运行
+ssh root@10.210.23.3 "cd /opt/virtio-rpc && nohup python3 -m guest.server > logs/server.log 2>&1 &"
+
+# 方式三：使用systemd服务（生产环境推荐）
+# 先复制服务文件到远端，然后启动
+ssh root@10.210.23.3 "systemctl start virtio-rpc && systemctl status virtio-rpc"
+```
+
+### 4.2 在Host端测试连接
+
+```bash
+# 设置环境变量简化命令
+VIRTIO_SOCKET=/var/lib/libvirt/qemu/channel/target/domain-26-UCypher-newtest1/test.vserial.0
+
+# 测试心跳
+ssh root@10.210.20.17 "cd /opt/virtio-rpc && python3 -m host.cli --socket $VIRTIO_SOCKET ping"
+
+# 测试获取系统信息
+ssh root@10.210.20.17 "cd /opt/virtio-rpc && python3 -m host.cli --socket $VIRTIO_SOCKET info"
+
+# 测试执行命令
+ssh root@10.210.20.17 "cd /opt/virtio-rpc && python3 -m host.cli --socket $VIRTIO_SOCKET exec 'uname -a'"
+```
+
+---
+
+## 五、测试用例
+
+### 5.1 基础功能测试
+
+| 测试项 | 命令 | 预期结果 |
+|--------|------|----------|
+| 心跳测试 | `ping` | 返回 `{"code": 0, "message": "pong"}` |
+| 系统信息 | `info` | 返回Guest系统信息 |
+| 系统状态 | `status` | 返回CPU、内存使用率等 |
+
+### 5.2 命令执行测试
+
+```bash
+# 设置环境变量（在Host上执行）
+export VIRTIO_SOCKET=/var/lib/libvirt/qemu/channel/target/domain-26-UCypher-newtest1/test.vserial.0
+
+# 简单命令
+python3 -m host.cli --socket $VIRTIO_SOCKET exec "echo hello"
+
+# 查看目录
+python3 -m host.cli --socket $VIRTIO_SOCKET exec "ls -la /tmp"
+
+# 查看进程
+python3 -m host.cli --socket $VIRTIO_SOCKET exec "ps aux | head -10"
+```
+
+### 5.3 文件传输测试
+
+```bash
+# 设置环境变量（在Host上执行）
+export VIRTIO_SOCKET=/var/lib/libvirt/qemu/channel/target/domain-26-UCypher-newtest1/test.vserial.0
+
+# 创建测试文件
+echo "test content" > /tmp/test.txt
+
+# 上传文件
+python3 -m host.cli --socket $VIRTIO_SOCKET upload /tmp/test.txt /tmp/remote_test.txt
+
+# 验证上传
+python3 -m host.cli --socket $VIRTIO_SOCKET exec "cat /tmp/remote_test.txt"
+
+# 下载文件
+python3 -m host.cli --socket $VIRTIO_SOCKET download /tmp/remote_test.txt /tmp/downloaded.txt
+```
+
+---
+
+## 六、日志查看与调试
+
+### 6.1 查看Guest服务日志
+
+```bash
+# 查看实时日志
+ssh root@10.210.23.3 "tail -f /opt/virtio-rpc/logs/server.log"
+
+# 查看最近100行日志
+ssh root@10.210.23.3 "tail -100 /opt/virtio-rpc/logs/server.log"
+```
+
+### 6.2 查看systemd服务日志（如果使用）
+
+```bash
+ssh root@10.210.23.3 "journalctl -u virtio-rpc -f"
+```
+
+---
+
+## 七、停止服务
+
+```bash
+# 方式一：杀进程
+ssh root@10.210.23.3 "pkill -f 'python3 -m guest.server'"
+
+# 方式二：systemd
+ssh root@10.210.23.3 "systemctl stop virtio-rpc"
+```
+
+---
+
+## 八、常见问题
+
+### Q1: 连接virtio-serial套接字失败
+- 检查QEMU是否正确配置了virtio-serial设备
+- 检查套接字文件是否存在且有权限访问
+- 检查Guest内virtio-serial驱动是否加载：`lsmod | grep virtio`
+
+### Q2: Guest端设备文件不存在
+```bash
+# 检查并加载驱动
+ssh root@10.210.23.3 "modprobe virtio_console"
+# 查看设备
+ssh root@10.210.23.3 "ls -la /dev/virtio-ports/"
+```
+
+### Q3: 依赖安装失败
+- 确认vendor目录中的包与目标系统架构匹配（x86_64/aarch64）
+- 尝试使用系统包管理器安装
+
+### Q4: 响应超时
+- 检查Guest服务是否正常运行
+- 检查是否有防火墙或SELinux阻止
+- 增加超时时间参数
+
+---
+
+## 九、快速部署脚本
+
+可将以下内容保存为 `deploy.sh` 方便一键部署：
+
+```bash
+#!/bin/bash
+set -e
+
+PROJECT_DIR="/Users/chengheming/Source/Personal/KVM相关/virtio-serial-RPC"
+HOST_IP="10.210.20.17"
+GUEST_IP="10.210.23.3"
+
+echo "=== 创建远端目录 ==="
+ssh root@${HOST_IP} "mkdir -p /opt/virtio-rpc/{host,logs}"
+ssh root@${GUEST_IP} "mkdir -p /opt/virtio-rpc/{guest,logs}"
+
+echo "=== 同步Host程序 ==="
+rsync -avz --exclude='__pycache__' --exclude='*.pyc' \
+    ${PROJECT_DIR}/host/ root@${HOST_IP}:/opt/virtio-rpc/host/
+
+echo "=== 同步Guest程序 ==="
+rsync -avz --exclude='__pycache__' --exclude='*.pyc' \
+    ${PROJECT_DIR}/guest/ root@${GUEST_IP}:/opt/virtio-rpc/guest/
+
+echo "=== 部署完成 ==="
+echo "请手动启动Guest服务并测试"
+```
+
+---
+
+## 十、更新代码
+
+代码修改后，只需重新同步并重启服务：
+
+```bash
+# 同步更新
+rsync -avz --delete --exclude='__pycache__' \
+    ${PROJECT_DIR}/guest/ root@10.210.23.3:/opt/virtio-rpc/guest/
+
+# 重启服务
+ssh root@10.210.23.3 "systemctl restart virtio-rpc"
+# 或
+ssh root@10.210.23.3 "pkill -f 'guest.server' && cd /opt/virtio-rpc && nohup python3 -m guest.server > logs/server.log 2>&1 &"
+```

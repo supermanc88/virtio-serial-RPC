@@ -32,8 +32,8 @@ virtio-serial是QEMU/KVM提供的一种半虚拟化串口设备，允许虚拟�
 
 | 端 | 设备类型 | 设备路径示例 |
 |------|----------|-------------|
-| Host | UNIX域套接字 | `/tmp/virtio-serial.sock` |
-| Guest | 字符设备 | `/dev/virtio-ports/channel.0` |
+| Host | UNIX域套接字 | `/var/lib/libvirt/qemu/channel/target/domain-26-UCypher-newtest1/test.vserial.0` |
+| Guest | 字符设备 | `/dev/virtio-ports/test.vserial.0` |
 
 ### 工作原理
 
@@ -43,13 +43,13 @@ virtio-serial是QEMU/KVM提供的一种半虚拟化串口设备，允许虚拟�
 |                  |                      |                  |
 | +-------------+  |    virtio-serial     | +-------------+  |
 | | UDS Client  |<-+----------------------+->| Char Device |  |
-| +-------------+  |    /tmp/xxx.sock     | | /dev/virtio |  |
+| +-------------+  |  libvirt channel     | | /dev/virtio |  |
 |                  |                      | +-------------+  |
 +------------------+                      +------------------+
 ```
 
-- **Host端**：QEMU创建一个UNIX域套接字（UDS），应用程序作为客户端连接该套接字进行通信
-- **Guest端**：内核加载virtio-serial驱动后，生成字符设备文件，应用程序通过读写该设备进行通信
+- **Host端**：libvirt/QEMU创建一个UNIX域套接字（UDS），路径通常为 `/var/lib/libvirt/qemu/channel/target/domain-XX-VMName/设备名`，应用程序作为客户端连接该套接字进行通信
+- **Guest端**：内核加载virtio-serial驱动后，生成字符设备文件 `/dev/virtio-ports/设备名`，应用程序通过读写该设备进行通信
 
 ---
 
@@ -75,8 +75,8 @@ virtio-serial是QEMU/KVM提供的一种半虚拟化串口设备，允许虚拟�
 │                                    │                                     │
 │                                    ▼                                     │
 │                    ┌──────────────────────────────┐                     │
-│                    │  /tmp/virtio-serial.sock     │                     │
-│                    │     (UNIX Domain Socket)     │                     │
+│                    │  /var/lib/libvirt/.../       │                     │
+│                    │     test.vserial.0 (UDS)     │                     │
 │                    └──────────────────────────────┘                     │
 └────────────────────────────────│────────────────────────────────────────┘
                                  │ virtio-serial
@@ -84,8 +84,8 @@ virtio-serial是QEMU/KVM提供的一种半虚拟化串口设备，允许虚拟�
 ┌────────────────────────────────│────────────────────────────────────────┐
 │                                ▼                                         │
 │                    ┌──────────────────────────────┐                     │
-│                    │  /dev/virtio-ports/channel.0 │                     │
-│                    │      (Character Device)      │                     │
+│                    │  /dev/virtio-ports/          │                     │
+│                    │    test.vserial.0 (CharDev)  │                     │
 │                    └──────────────────────────────┘                     │
 │                                    │                                     │
 │  ┌─────────────────────────────────────────────────────────────────┐   │
@@ -645,17 +645,17 @@ qemu-system-x86_64 \
 
 | 参数 | 说明 | 示例值 |
 |------|------|--------|
-| chardev socket path | UDS文件路径 | /tmp/virtio-serial.sock |
+| chardev socket path | UDS文件路径 | /var/lib/libvirt/qemu/channel/target/domain-XX-VMName/test.vserial.0 |
 | server | QEMU作为服务端 | on |
 | wait | 不等待客户端连接 | off |
-| virtserialport name | Guest内设备名称 | channel.0 |
+| virtserialport name | Guest内设备名称 | test.vserial.0 |
 
 ### Host端配置文件
 
 ```yaml
 # host_config.yaml
 connection:
-  socket_path: /tmp/virtio-serial.sock
+  socket_path: /var/lib/libvirt/qemu/channel/target/domain-26-UCypher-newtest1/test.vserial.0
   connect_timeout: 5
   read_timeout: 30
   write_timeout: 30
@@ -677,7 +677,7 @@ logging:
 ```yaml
 # guest_config.yaml
 device:
-  path: /dev/virtio-ports/channel.0
+  path: /dev/virtio-ports/test.vserial.0
   buffer_size: 65536
 
 server:
@@ -834,7 +834,7 @@ class VirtioRPCServer:
 from host.client import VirtioRPCClient
 
 # 创建客户端
-client = VirtioRPCClient('/tmp/virtio-serial.sock')
+client = VirtioRPCClient('/var/lib/libvirt/qemu/channel/target/domain-26-UCypher-newtest1/test.vserial.0')
 
 # 连接
 client.connect()
@@ -869,7 +869,7 @@ from guest.server import VirtioRPCServer
 from guest.handlers import system, shell, file
 
 # 创建服务端
-server = VirtioRPCServer('/dev/virtio-ports/channel.0')
+server = VirtioRPCServer('/dev/virtio-ports/test.vserial.0')
 
 # 注册处理器（默认已注册标准处理器）
 # server.register_handler('GET', '/api/v1/custom', custom_handler)
@@ -881,20 +881,22 @@ server.start()
 ### 命令行工具使用
 
 ```bash
-# Host端发送命令
-$ python -m host.cli --socket /tmp/virtio-serial.sock ping
+# Host端发送命令（注意socket路径较长，可以设置环境变量简化）
+$ export VIRTIO_SOCKET=/var/lib/libvirt/qemu/channel/target/domain-26-UCypher-newtest1/test.vserial.0
+
+$ python -m host.cli --socket $VIRTIO_SOCKET ping
 {"code": 0, "message": "pong"}
 
-$ python -m host.cli --socket /tmp/virtio-serial.sock exec "ls -la /tmp"
+$ python -m host.cli --socket $VIRTIO_SOCKET exec "ls -la /tmp"
 total 48
 drwxrwxrwt 12 root root 4096 ...
 
-$ python -m host.cli --socket /tmp/virtio-serial.sock upload local.txt /tmp/remote.txt
+$ python -m host.cli --socket $VIRTIO_SOCKET upload local.txt /tmp/remote.txt
 Upload successful: /tmp/remote.txt (1024 bytes)
 
 # Guest端启动服务
 $ python -m guest.server --config /etc/virtio-rpc/config.yaml
-[INFO] VirtioRPC Server started on /dev/virtio-ports/channel.0
+[INFO] VirtioRPC Server started on /dev/virtio-ports/test.vserial.0
 ```
 
 ---
@@ -968,10 +970,12 @@ systemctl status virtio-rpc
 
 ```bash
 # 在Host上执行
-python -m host.cli --socket /tmp/virtio-serial.sock ping
+export VIRTIO_SOCKET=/var/lib/libvirt/qemu/channel/target/domain-26-UCypher-newtest1/test.vserial.0
+
+python -m host.cli --socket $VIRTIO_SOCKET ping
 # 期望输出: {"code": 0, "message": "pong", ...}
 
-python -m host.cli --socket /tmp/virtio-serial.sock info
+python -m host.cli --socket $VIRTIO_SOCKET info
 # 期望输出: 系统信息JSON
 ```
 
